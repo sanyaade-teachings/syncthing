@@ -42,7 +42,7 @@ func TestHandleGetRequest(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	w.Body = new(bytes.Buffer)
-	handleGetRequest(w, httptest.NewRequest("GET", "/", nil))
+	handleEndpointFull(w, httptest.NewRequest("GET", "/", nil))
 
 	result := make(map[string][]*relay)
 	err := json.NewDecoder(w.Body).Decode(&result)
