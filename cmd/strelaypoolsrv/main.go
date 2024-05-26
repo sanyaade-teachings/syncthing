@@ -227,6 +227,7 @@ func main() {
 		Handler:     handler,
 		ReadTimeout: 10 * time.Second,
 	}
+	srv.SetKeepAlivesEnabled(false)
 
 	err = srv.Serve(listener)
 	if err != nil {

@@ -41,7 +41,8 @@ func main() {
 }
 
 func server(params *cli) error {
-	http.Handle("/meta.json", httpcache.SinglePath(&githubReleases{url: params.URL}, params.CacheTime))
+	mux := http.NewServeMux()
+	mux.Handle("/meta.json", httpcache.SinglePath(&githubReleases{url: params.URL}, params.CacheTime))
 
 	for _, fwd := range params.Forward {
 		path, url, ok := strings.Cut(fwd, "->")
@@ -51,7 +52,14 @@ func server(params *cli) error {
 		http.Handle(path, httpcache.SinglePath(&proxy{url: url}, params.CacheTime))
 	}
 
-	return http.ListenAndServe(params.Listen, nil)
+	srv := &http.Server{
+		Addr:         params.Listen,
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	srv.SetKeepAlivesEnabled(false)
+	return srv.ListenAndServe()
 }
 
 type githubReleases struct {
