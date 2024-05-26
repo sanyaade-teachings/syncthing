@@ -27,9 +27,7 @@ import (
 	"github.com/syncthing/syncthing/lib/assets"
 	_ "github.com/syncthing/syncthing/lib/automaxprocs"
 	"github.com/syncthing/syncthing/lib/geoip"
-	"github.com/syncthing/syncthing/lib/httpcache"
 	"github.com/syncthing/syncthing/lib/protocol"
-	"github.com/syncthing/syncthing/lib/rand"
 	"github.com/syncthing/syncthing/lib/relay/client"
 	"github.com/syncthing/syncthing/lib/sync"
 	"github.com/syncthing/syncthing/lib/tlsutil"
@@ -49,6 +47,10 @@ type relay struct {
 	uri            *url.URL
 	Stats          *stats    `json:"stats"`
 	StatsRetrieved time.Time `json:"statsRetrieved"`
+}
+
+type relayShort struct {
+	URL string `json:"url"`
 }
 
 type stats struct {
@@ -219,9 +221,11 @@ func main() {
 	}
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/", handleAssets)
-	handler.Handle("/endpoint", httpcache.SinglePath(http.HandlerFunc(handleRequest), 15*time.Second))
-	handler.HandleFunc("/metrics", handleMetrics)
+	handler.HandleFunc("GET /", handleAssets)
+	handler.HandleFunc("GET /endpoint", withAPIMetrics(handleEndpointShort))
+	handler.HandleFunc("GET /endpoint/full", withAPIMetrics(handleEndpointFull))
+	handler.HandleFunc("POST /endpoint", withAPIMetrics(handleRegister))
+	handler.HandleFunc("GET /metrics", handleMetrics)
 
 	srv := http.Server{
 		Handler:     handler,
@@ -261,39 +265,24 @@ func handleAssets(w http.ResponseWriter, r *http.Request) {
 	assets.Serve(w, r, as)
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	timer := prometheus.NewTimer(apiRequestsSeconds.WithLabelValues(r.Method))
-
-	w = NewLoggingResponseWriter(w)
-	defer func() {
-		timer.ObserveDuration()
-		lw := w.(*loggingResponseWriter)
-		apiRequestsTotal.WithLabelValues(r.Method, strconv.Itoa(lw.statusCode)).Inc()
-	}()
-
-	if ipHeader != "" {
-		hdr := r.Header.Get(ipHeader)
-		fields := strings.Split(hdr, ",")
-		if len(fields) > 0 {
-			r.RemoteAddr = strings.TrimSpace(fields[len(fields)-1])
-		}
-	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	switch r.Method {
-	case "GET":
-		handleGetRequest(w, r)
-	case "POST":
-		handlePostRequest(w, r)
-	default:
-		if debug {
-			log.Println("Unhandled HTTP method", r.Method)
-		}
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func withAPIMetrics(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		timer := prometheus.NewTimer(apiRequestsSeconds.WithLabelValues(r.Method))
+		w = NewLoggingResponseWriter(w)
+		defer func() {
+			timer.ObserveDuration()
+			lw := w.(*loggingResponseWriter)
+			apiRequestsTotal.WithLabelValues(r.Method, strconv.Itoa(lw.statusCode)).Inc()
+		}()
+		next(w, r)
 	}
 }
 
-func handleGetRequest(rw http.ResponseWriter, r *http.Request) {
+// handleEndpointFull returns the relay list with full metadata and
+// statistics. Large, and expensive.
+func handleEndpointFull(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("Content-Type", "application/json; charset=utf-8")
+	rw.Header().Set("Access-Control-Allow-Origin", "*")
 
 	mut.RLock()
 	relays := make([]*relay, len(permanentRelays)+len(knownRelays))
@@ -301,17 +290,38 @@ func handleGetRequest(rw http.ResponseWriter, r *http.Request) {
 	copy(relays[n:], knownRelays)
 	mut.RUnlock()
 
-	// Shuffle
-	rand.Shuffle(relays)
-
 	_ = json.NewEncoder(rw).Encode(map[string][]*relay{
 		"relays": relays,
 	})
 }
 
-func handlePostRequest(w http.ResponseWriter, r *http.Request) {
+// handleEndpointShort returns the relay list with only the URL.
+func handleEndpointShort(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Content-Type", "application/json; charset=utf-8")
+	rw.Header().Set("Access-Control-Allow-Origin", "*")
+
+	mut.RLock()
+	relays := make([]relayShort, len(permanentRelays)+len(knownRelays))
+	for _, r := range append(permanentRelays, knownRelays...) {
+		relays = append(relays, relayShort{URL: r.URL})
+	}
+	mut.RUnlock()
+
+	_ = json.NewEncoder(rw).Encode(map[string][]relayShort{
+		"relays": relays,
+	})
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Get the IP address of the client
 	rhost := r.RemoteAddr
+	if ipHeader != "" {
+		hdr := r.Header.Get(ipHeader)
+		fields := strings.Split(hdr, ",")
+		if len(fields) > 0 {
+			rhost = strings.TrimSpace(fields[len(fields)-1])
+		}
+	}
 	if host, _, err := net.SplitHostPort(rhost); err == nil {
 		rhost = host
 	}
