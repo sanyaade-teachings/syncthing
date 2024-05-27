@@ -49,7 +49,8 @@ func server(params *cli) error {
 		if !ok {
 			return fmt.Errorf("invalid forward: %q", fwd)
 		}
-		http.Handle(path, httpcache.SinglePath(&proxy{url: url}, params.CacheTime))
+		log.Println("Forwarding", path, "to", url)
+		mux.Handle(path, httpcache.SinglePath(&proxy{url: url}, params.CacheTime))
 	}
 
 	srv := &http.Server{
