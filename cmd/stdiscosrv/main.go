@@ -22,6 +22,7 @@ import (
 	_ "github.com/syncthing/syncthing/lib/automaxprocs"
 	"github.com/syncthing/syncthing/lib/build"
 	"github.com/syncthing/syncthing/lib/protocol"
+	"github.com/syncthing/syncthing/lib/rand"
 	"github.com/syncthing/syncthing/lib/tlsutil"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/thejerf/suture/v4"
@@ -80,6 +81,7 @@ func main() {
 	var replKeyFile string
 	var useHTTP bool
 	var largeDB bool
+	var amqpAddress string
 
 	log.SetOutput(os.Stdout)
 	log.SetFlags(0)
@@ -96,6 +98,7 @@ func main() {
 	flag.StringVar(&replCertFile, "replication-cert", "", "Certificate file for replication")
 	flag.StringVar(&replKeyFile, "replication-key", "", "Key file for replication")
 	flag.BoolVar(&largeDB, "large-db", false, "Use larger database settings")
+	flag.StringVar(&amqpAddress, "amqp-address", "", "Address to AMQP broker")
 	showVersion := flag.Bool("version", false, "Show version")
 	flag.Parse()
 
@@ -201,6 +204,14 @@ func main() {
 	if len(allowedReplicationPeers) > 0 {
 		rl := newReplicationListener(replicationListen, replCert, allowedReplicationPeers, db)
 		main.Add(rl)
+	}
+
+	// If we have an AMQP broker, start that
+	if amqpAddress != "" {
+		clientID := rand.String(10)
+		kr := newAMQPReplicator(amqpAddress, clientID, db)
+		repl = append(repl, kr)
+		main.Add(kr)
 	}
 
 	// Start the main API server.
